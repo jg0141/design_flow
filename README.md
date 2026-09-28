@@ -2,6 +2,12 @@
 
 비밀번호로 여는 Physical Implementation 학습 마인드맵. GitHub Pages로 배포하는 정적 사이트이며 특정 AI 서비스에 묶여 있지 않습니다.
 
+## 학습 이론
+
+- [Timing 기초 이론: Verilog · RTL · Pipeline · Setup/Hold](docs/timing-fundamentals.md)
+
+위 문서는 공개 Markdown 학습 자료입니다. 암호화된 마인드맵의 `data.json`과는 별도로 관리합니다.
+
 ## 파일 구성
 
 | 파일 | 역할 |
