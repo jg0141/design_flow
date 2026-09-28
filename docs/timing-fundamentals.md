@@ -227,6 +227,156 @@ Multi-cycle 연산을 설계했다는 사실과 SDC에 `set_multicycle_path`를 
 
 Setup은 “이번에 보낸 data가 다음 capture에 늦지 않는가”, hold는 “새 data가 너무 빨리 도착해 현재 capture를 방해하지 않는가”를 확인한다.
 
+
+## 12. Negative delay와 상대적인 시간
+
+“RTL에서 minus delay가 존재한다”보다는 **STA report의 음수 값이 어떤 항목인지 먼저 구분한다**고 정리한다.
+
+| 항목 | 음수의 의미 |
+|---|---|
+| 기준 에지에 대한 상대 시각 | 기준 에지보다 먼저 발생 |
+| Clock skew | 이 문서의 정의에서는 Capture clock latency가 Launch clock latency보다 작음 |
+| Setup/Hold slack | Timing requirement를 만족하지 못함 |
+| Library Setup/Hold time | 셀 내부의 data와 clock 전달 관계에 따라 음수 constraint가 가능 |
+
+Capture 기준 에지가 10 ns이고 data arrival가 8 ns이면 상대 시각은 8 − 10 = −2 ns이다. 기준보다 2 ns 먼저 도착했다는 뜻이며 실제 전파 시간이 음수라는 뜻은 아니다. 이 값 자체를 negative slack으로 해석해서도 안 된다.
+
+“모든 EDA check tool은 endpoint로 결과를 분석한다”는 과도한 일반화다. **STA의 Setup/Hold 검사는 endpoint의 required time과 data arrival time을 비교하며, startpoint·data path·Launch/Capture clock path를 함께 고려한다.**
+
+## 13. Timing Exception과 CDC
+
+| 개념 | 정의 |
+|---|---|
+| Timing Exception | 기본 timing 분석 규칙을 특정 경로에 대해 변경하는 제약 |
+| Multicycle Path | 실제 동작이 허용하는 여러 cycle의 Launch/Capture 관계를 지정하는 경로 |
+| CDC (Clock Domain Crossing) | 서로 다른 clock domain 사이로 신호가 전달되는 것 |
+
+같은 clock domain에도 multicycle path가 존재할 수 있다. CDC라고 반드시 multicycle을 적용하는 것은 아니다.
+
+- Synchronous clocks: 주기·위상 관계를 정의하여 STA로 분석한다. 기능상 필요할 때 multicycle을 적용한다.
+- Asynchronous clocks: synchronizer, handshake, asynchronous FIFO 등 전달 방식에 맞는 CDC 구조와 검증이 필요하다. Multicycle로 metastability를 해결할 수 없다.
+- False path와 asynchronous clock group 등으로 일반적인 timing 분석을 제외하는 판단은 CDC 구조의 안전성 검증과 별개다.
+
+RTL designer가 Clock enable이나 제어 로직을 이용해 특정 data를 여러 cycle 후에 capture하도록 설계할 수 있다. STA tool은 그 기능적 의도를 자동으로 모두 추론하지 못하므로 SDC로 실제 허용 관계를 전달한다.
+
+PrimeTime은 제약에 따라 검사한다. Synthesis/P&R tool은 제약을 목표로 최적화한다. 불필요하게 엄격한 제약은 의도와 다른 violation을 만들거나, 불필요한 cell upsizing 및 buffer 삽입으로 area/power를 증가시킬 수 있다. 반대로 근거 없는 exception은 실제 오류를 가릴 수 있다.
+
+## 14. Launch/Capture, Data delay, Clock delay
+
+| 항목 | 의미 |
+|---|---|
+| Launch FF | CLKA의 active edge에서 data를 내보내는 FF |
+| Capture FF | CLKB의 active edge에서 data를 저장하는 FF |
+| Clock-to-Q delay | Launch FF의 clock edge 이후 Q가 바뀌는 데 걸리는 시간 |
+| Data delay | 여기서는 Q에서 조합논리·배선을 거쳐 Capture D까지 전달되는 지연 |
+| Clock delay | Clock이 각 FF의 clock pin까지 전달되는 지연 |
+
+Data arrival에는 Launch edge time, Launch clock latency, clock-to-Q, data path delay가 반영된다. Setup은 capture 전에 data가 충분히 일찍 도착하는지, Hold는 capture 주변에서 기존 data가 충분히 유지되는지 검사한다.
+
+Multicycle은 **비교하는 Launch/Capture 에지 관계**를 바꾼다. 실제 clock 파형, data delay, register 수, library Setup/Hold 값을 직접 변경하지 않는다.
+
+## 15. set_multicycle_path 문법과 기본값
+
+정확한 명령 이름은 `set_multicycle_path`이다. `set_multi_cycle`이 아니다.
+
+```tcl
+# 아래 핀 이름은 예시다. 실제 netlist 이름으로 바꿔야 한다.
+set_multicycle_path 1 -setup -end \
+    -from [get_pins U_LAUNCH/CK] -to [get_pins U_CAPTURE/D]
+
+set_multicycle_path 0 -hold -start \
+    -from [get_pins U_LAUNCH/CK] -to [get_pins U_CAPTURE/D]
+```
+
+| 옵션 | 의미 |
+|---|---|
+| -from / -to | 적용할 경로 선택 |
+| -setup | Setup 검사 관계 지정 |
+| -hold | Hold 검사 관계 조정 |
+| -start | Launch clock 주기로 Launch 에지 이동 |
+| -end | Capture clock 주기로 Capture 에지 이동 |
+
+PrimeTime에서 Setup 기준 기본값은 -end, Hold 기준 기본값은 -start이다. 기본 Setup multiplier는 1, Hold multiplier는 0이다. 기본 동작을 얻기 위해 위 두 명령을 반드시 작성할 필요는 없지만 옵션을 명시하면 의도가 분명해진다. 다른 tool의 기본값은 해당 tool 문서를 확인한다.
+
+**Hold 0은 library Hold time이 0이라는 뜻이 아니다.** Multicycle에 의한 Hold 에지 조정값이다. Setup 관계를 먼저 바꾸면 Hold 0 상태에서도 도출되는 Hold 관계가 달라질 수 있다.
+
+## 16. 동일한 10 ns clock: Setup 2 / Hold 1
+
+두 FF가 동일한 rising-edge clock으로 동작하고 실제 제어 로직이 2-cycle 전달을 허용한다고 가정한다. 수치는 강의 사진에서 판독한 값이 아닌 교육용 예제다.
+
+기본 Setup 관계는 Launch 0 ns → Capture 10 ns이다. 다음 제약은 Capture 에지를 20 ns로 이동시킨다.
+
+```tcl
+set_multicycle_path 2 -setup -end \
+    -from [get_cells U_A] -to [get_cells U_B]
+```
+
+Setup만 변경하면 그에 따라 Hold 관계도 바뀌어 한 cycle의 불필요한 minimum delay 요구가 생길 수 있다. 원래 Hold 관계를 유지하려는 경우 다음을 추가한다.
+
+```tcl
+set_multicycle_path 1 -hold -end \
+    -from [get_cells U_A] -to [get_cells U_B]
+```
+
+| 적용 제약 | Setup 비교 에지 | Hold 비교 에지 |
+|---|---|---|
+| 기본값 | Launch 0 → Capture 10 ns | Launch 0 → Capture 0 ns |
+| Setup 2 -end만 적용 | Launch 0 → Capture 20 ns | Launch 0 → Capture 10 ns |
+| Hold 1 -end 추가 | Launch 0 → Capture 20 ns | Launch 0 → Capture 0 ns |
+
+이 표는 에지 관계만 나타내며 library requirement, clock latency, uncertainty 등은 별도로 반영한다. 같은 주기에서는 Hold에 -start를 사용해도 동등한 간격을 만들 수 있지만, 이동하는 에지는 Launch 에지이므로 표의 절대 에지 시각과는 구분한다.
+
+**Setup N / Hold N−1**은 Setup 변경에 따라 이동한 Hold 관계를 의도에 맞게 조정하는 흔한 조합이다. **Hold 1을 “한 cycle 동안 data를 유지하라”로 해석하면 안 된다.** 서로 다른 주기에서는 기준 옵션과 실제 edge 관계를 반드시 함께 확인한다.
+
+## 17. 서로 다른 주기: -start / -end
+
+| 검사 | -start: Launch 에지 | -end: Capture 에지 |
+|---|---|---|
+| Setup multiplier N | (N−1) × Launch period만큼 이전으로 | (N−1) × Capture period만큼 이후로 |
+| Hold multiplier M | M × Launch period만큼 이후로 | M × Capture period만큼 이전으로 |
+
+Setup 이동량은 기본 Setup 관계 기준이고, Hold 이동량은 Setup 설정으로 도출된 Hold 관계 기준이다.
+
+CLKA가 5 ns, CLKB가 10 ns인 예제:
+
+| 제약 | 기본 Setup 관계에서 변경되는 시간 |
+|---|---|
+| 2 -setup -start | Launch 에지를 5 ns 이전으로 이동 |
+| 2 -setup -end | Capture 에지를 10 ns 이후로 이동 |
+
+이는 추가 여유의 차이를 설명하는 예제다. 서로 다른 clock 사이의 최종 허용 시간을 multiplier × period만으로 단정하면 안 된다. 기본 edge 관계와 위상도 고려해야 한다.
+
+빠른 clock의 cycle 단위로 표현하려는 경우:
+
+| 전달 방향 | 빠른 clock 기준 |
+|---|---|
+| Fast → Slow | -start |
+| Slow → Fast | -end |
+
+**항상 빠른 clock을 기준으로 해야 한다는 규칙은 아니다.** 먼저 실제 RTL의 유효 Launch/Capture 에지를 정하고, 그 관계를 표현할 기준과 multiplier를 선택한다. Fast → Slow라도 매 fast edge에 새로운 data를 내보낸다면 단순히 주파수 비율만 보고 긴 data delay를 허용할 수 없다.
+
+강의 사진에서는 CLKA/CLKB 파형과 Setup/Hold 옵션을 확인할 수 있으나 반사 때문에 정확한 주기·위상·일부 숫자는 확정하지 않는다.
+
+## 18. PrimeTime에서 적용 후 확인
+
+```tcl
+# Setup 경로 확인
+report_timing -from [get_cells U_A] -to [get_cells U_B] \
+    -delay_type max -path_type full_clock_expanded
+
+# Hold 경로 확인
+report_timing -from [get_cells U_A] -to [get_cells U_B] \
+    -delay_type min -path_type full_clock_expanded
+```
+
+1. 실제 RTL의 enable/capture 조건이 여러 cycle을 허용하는지 확인한다.
+2. 실제 경로와 clock period·waveform·관계를 확인한다.
+3. 해당 경로에만 exception을 지정한다. Clock 전체를 -from/-to로 선택하면 의도보다 넓게 적용될 수 있다.
+4. Setup/Hold report에서 Launch/Capture edge time과 경로가 의도대로 선택됐는지 확인한다.
+5. Data arrival time, data required time, slack을 함께 확인한다.
+
+**Setup violation이 있다는 이유만으로 multicycle을 추가하지 않는다.** STA에 전달하는 것은 실제 설계가 허용하는 timing 관계다.
+
 ## 참고 자료
 
 - [Cadence — Verilog HDL and Its Ancestors and Descendants](https://community.cadence.com/cadence_blogs_8/b/breakfast-bytes/posts/verilog-hdl-and-its-ancestors-and-descendants)
@@ -234,3 +384,7 @@ Setup은 “이번에 보낸 data가 다음 capture에 늦지 않는가”, hold
 - [Intel — Metastability Analysis](https://www.intel.com/content/www/us/en/docs/programmable/683068/18-1/metastability-analysis.html)
 - [Intel — Timing Analyzer Example: Clock Analysis Equations](https://www.intel.com/content/www/us/en/support/programmable/support-resources/design-examples/quartus/tq-clock.html)
 - [Intel — Default Multicycle Analysis](https://www.intel.com/content/www/us/en/docs/programmable/683243/21-3/default-multicycle-analysis.html)
+
+- [AMD UG903 — set_multicycle_path Syntax](https://docs.amd.com/r/2023.1-English/ug903-vivado-using-constraints/set_multicycle_path-Syntax)
+- [AMD UG903 — Multicycle Paths](https://docs.amd.com/r/2025.1-English/ug903-vivado-using-constraints/Multicycle-Paths)
+- [AMD UG903 — Fast-to-Slow Setup/Hold Example](https://docs.amd.com/r/2021.2-English/ug903-vivado-using-constraints/Example-Setup-3-start/Hold-2)
