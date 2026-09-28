@@ -377,6 +377,151 @@ report_timing -from [get_cells U_A] -to [get_cells U_B] \
 
 **Setup violation이 있다는 이유만으로 multicycle을 추가하지 않는다.** STA에 전달하는 것은 실제 설계가 허용하는 timing 관계다.
 
+## 19. Synchronous/Asynchronous clock과 PLL
+
+Synchronous는 두 clock의 상대적인 주기·위상 관계를 예측할 수 있는 경우다. Asynchronous는 유효한 에지 관계를 보장할 수 없는 경우다. PLL 개수나 source 이름만으로 판단하지 않는다.
+
+| 명령 | 역할 |
+|---|---|
+| create_clock | 분석의 기준 clock 정의 |
+| create_generated_clock | 기존 master clock과의 분주·배주·위상 이동 등 파생 관계 정의 |
+
+PLL 출력도 generated clock으로 정의할 수 있다. Block-level 분석에서 PLL 출력을 분석 시작점으로 삼는다면 primary clock으로 모델링할 수도 있다. 이때 상위 clock과의 관계가 필요한 분석인지 검토한다. 두 clock에 각각 create_clock을 사용해도 자동으로 asynchronous가 되는 것은 아니다.
+
+```tcl
+# 교육용 예제. 시간 단위가 ns이고 실제 이름이 일치할 때의 형태.
+create_clock -name CLK -period 10 [get_ports clk]
+create_generated_clock -name CLK_DIV2 \
+    -source [get_ports clk] -divide_by 2 [get_pins U_DIV/Q]
+```
+
+실제 SDC 반영 전 확인: PLL 입력/출력 위치, 배주·분주 비율, 출력 위상 관계, mode, master/generated clock 연결. 원래 메모의 “둘 다 create_clock & async”는 clock 구조가 없으므로 확정하지 않는다.
+
+## 20. False path, Max/Min delay와 metastability
+
+set_false_path와 set_max_delay는 같은 명령이 아니다.
+
+| 명령 | 역할 |
+|---|---|
+| set_false_path | 선택한 경로의 해당 timing check를 제외 |
+| set_max_delay | 최대 delay requirement 지정 |
+| set_min_delay | 최소 delay requirement 지정 |
+
+어느 명령도 metastability를 직접 보존하거나 제거하지 않는다. Synchronizer는 metastability가 후단으로 전달될 확률을 낮추기 위한 구조다. 일반적인 2-FF synchronizer에서 첫 번째 FF → 두 번째 FF는 수신 clock domain의 synchronous 경로이므로 정상 timing 분석을 유지한다.
+
+두 FF 사이의 clock-to-Q 및 data delay가 작아지면 다음 FF가 sample하기 전 resolution time 확보에 유리하다. MTBF는 resolution time, clock/data 활동률, 셀 특성 등에 영향을 받는다. 단순 2-FF 구조는 임의의 multi-bit bus나 짧은 pulse 전달을 모두 보장하지 않는다.
+
+Async 입력 → 첫 번째 FF의 예외와, 첫 번째 FF → 두 번째 FF의 timing requirement를 구분한다. Async CDC 경로에도 물리적 전달 시간 제한이 필요하면 max-delay 제약을 검토할 수 있다. 같은 경로에 넓은 false-path/async clock-group을 함께 적용하면 max-delay 분석이 가려질 수 있다. 실제 tool의 exception 우선순위를 확인한다.
+
+-datapath_only 같은 옵션과 Hold 처리 방식은 tool·버전에 따라 다르므로 AMD 예제를 PrimeTime에 그대로 옮기지 않는다.
+
+## 21. Clock skew, Data skew와 max/min delay
+
+동일한 경로·동일 조건·동일 시간 단위에 set_max_delay 0과 set_min_delay 1을 적용하는 것은 일반적인 skew 최소화 방법이 아니다. 일반적인 같은 경로 delay 모델에서는 최대값 ≤ 0, 최소값 ≥ 1이라는 모순된 요구가 된다.
+
+set_max_delay 0을 특수한 최적화 목표로 사용하는 script가 있을 수는 있지만 cell을 일렬로 배치하거나 skew를 최소화한다는 보장은 없다. set_min_delay는 너무 짧은 경로에 delay 추가를 요구할 수 있다.
+
+| 목적 | 검토 대상 |
+|---|---|
+| Clock 도착 시각 차이 감소 | CTS의 skew 목표, clock routing, clock latency |
+| 여러 data bit의 상대 도착 시간 차이 제한 | Tool이 지원하는 bus-skew/data-check 제약, 배선 |
+| Synchronizer FF 사이의 data delay 감소 | 정상 timing 분석, 적절한 delay 목표, 배치·배선 및 synchronizer 속성 |
+
+Bus skew는 여러 경로의 상대적인 도착 시간 차이다. 한 경로의 max/min delay와 동일한 개념이 아니다. Pre-CTS의 ideal clock만으로 post-CTS 실제 skew가 검증되지는 않는다.
+
+실제 script에서 두 명령의 -from/-to/-through, 적용 mode, 시간 단위를 확인하기 전에는 해당 숫자를 적용하지 않는다.
+
+## 22. NAND tree: Functional/Test mode 예외
+
+“Test용 NAND tree이므로 당연히 false path”로 결론 내리지 않는다. Functional mode에서 활성화되지 않거나 기능적으로 유효하지 않은 경로라는 근거를 먼저 확인한다.
+
+```tcl
+# 예시: test_mode=0이 실제 functional mode인 경우에만 사용
+set_case_analysis 0 [get_ports test_mode]
+
+# 아래 hierarchy/pin 이름은 확인되지 않은 예시
+set nand_pins [get_pins {I_PAD/*/*_NAND_*/PO}]
+sizeof_collection $nand_pins
+get_object_name $nand_pins
+
+# 매칭된 핀과 해당 경로의 기능을 확인한 뒤에만 적용
+# set_false_path -through $nand_pins
+```
+
+get_pins 결과가 비어 있거나 예상보다 넓은지 확인한다. -through는 해당 핀을 통과하는 경로에 영향을 주므로 필요하면 -from/-to도 지정한다. Case analysis로 비활성화된 경로에는 추가 exception이 불필요할 수 있다.
+
+Functional mode에서 제외한 test 경로라도 실제 검사해야 하는 test-mode 요구가 있다면 별도 mode SDC에서 검증한다. 현재 NAND-tree report와 netlist가 없으므로 실제 false-path 대상은 확정하지 않는다.
+
+## 23. Async reset: Recovery/Removal
+
+정확한 용어는 Recovery와 Removal이다.
+
+| 검사 | 의미 |
+|---|---|
+| Recovery | Reset 해제가 유효 clock edge보다 충분히 먼저 일어나는가 |
+| Removal | Clock edge 이후 필요한 시간 동안 reset이 유지되는가 |
+
+Async reset도 deassertion 시점에는 metastability와 FF 간 해제 불일치 문제가 생길 수 있다. 흔히 asynchronous assertion / synchronous deassertion 구조를 사용하며 domain별 reset 구조를 검토한다.
+
+```tcl
+# 아래의 포괄적인 예외는 구조 확인 없이 적용하지 않는다.
+# set_false_path -from [get_ports rst]
+```
+
+확인할 내용:
+- Reset 생성 위치와 각 수신 clock domain.
+- Reset synchronizer 및 해제 방식.
+- 외부 async 구간 중 예외가 필요한 범위.
+- Synchronizer 이후 내부 reset 경로의 Recovery/Removal requirement.
+
+“P&R 전에 Recovery/Removal violation이 안 나오게 한다”는 이유로 경로 전체를 자르지 않는다. 예외는 검증 방법과 회로 구조를 근거로 결정하며, 검사를 숨기는 것이 안전한 reset 동작을 보장하지 않는다.
+
+## 24. Multicycle 에지 관계를 그려 보는 연습
+
+실제 강의 사진의 주기·위상은 확정하지 않는다. 아래는 동일한 rising-edge 10 ns clock을 쓰고 실제 제어 로직이 2-cycle 전달을 허용하는 교육용 예제다.
+
+| 설정 | Launch | Setup Capture | Hold Capture |
+|---|---|---|---|
+| 기본 | 0 ns | 10 ns | 0 ns |
+| Setup 2 -end | 0 ns | 20 ns | 10 ns |
+| Setup 2 -end + Hold 1 -end | 0 ns | 20 ns | 0 ns |
+
+에지 사이에 data 경로를 연결해 보고, Capture FF가 10 ns의 중간 결과를 유효한 결과로 사용하지 않는 이유를 RTL enable/프로토콜로 설명한다. Hold 표는 에지 관계이며 library Hold time은 별도로 반영한다.
+
+주기가 다르면:
+1. 두 clock의 period와 waveform을 적는다.
+2. 기본 Setup/Hold 에지 관계를 찾는다.
+3. -start면 Launch, -end면 Capture clock 주기로 에지를 이동한다.
+4. Setup과 Hold를 함께 계산한다.
+5. PrimeTime report의 edge time과 비교한다.
+
+배수나 주파수 비율만 보고 multicycle을 지정하지 않는다. 기본 예제의 Tcl 명령과 상세 설명은 16–18번 항목을 참고한다.
+
+## 25. SDC update → pre-STA 작업 순서
+
+1. Clock 구조: PLL 입력·출력·분주 위치, period/waveform, synchronous/asynchronous 관계 정리.
+2. Mode 설정: functional/test 선택 신호와 set_case_analysis 검토.
+3. Multicycle: 실제 enable 및 유효 Launch/Capture 에지 관계 확인.
+4. CDC 제약: synchronizer/handshake/FIFO 구조와 예외 범위 검토.
+5. Delay/skew: 어떤 경로를 어떤 단위·목적으로 제한하는지 확인.
+6. NAND tree: mode와 실제 report를 근거로 필요한 예외만 적용.
+7. Reset: 해제 방식과 Recovery/Removal 검증 범위 확인.
+8. Pre-STA: clock 정의, missing constraint, unconstrained path, exception 적용 범위, Setup/Hold 및 Recovery/Removal 확인.
+
+```tcl
+# PrimeTime 기본 확인 예제
+report_units
+report_clock
+check_timing
+report_exceptions
+report_timing -delay_type max -path_type full_clock_expanded
+report_timing -delay_type min -path_type full_clock_expanded
+```
+
+기본 report_timing만으로 모든 Recovery/Removal check가 검증됐다고 결론 내리지 않는다. 해당 tool 버전의 check-type 보고 옵션과 분석 coverage를 함께 확인한다.
+
+필요한 실제 input: 최신 SDC, PLL/clock 구조, max/min-delay 원문, NAND-tree timing report와 해당 netlist, reset 구조. 현재 추가한 것은 학습 및 검토 지침이며 실제 프로젝트 SDC 수정본이나 pre-STA 실행 결과가 아니다.
+
 ## 참고 자료
 
 - [Cadence — Verilog HDL and Its Ancestors and Descendants](https://community.cadence.com/cadence_blogs_8/b/breakfast-bytes/posts/verilog-hdl-and-its-ancestors-and-descendants)
@@ -388,3 +533,8 @@ report_timing -from [get_cells U_A] -to [get_cells U_B] \
 - [AMD UG903 — set_multicycle_path Syntax](https://docs.amd.com/r/2023.1-English/ug903-vivado-using-constraints/set_multicycle_path-Syntax)
 - [AMD UG903 — Multicycle Paths](https://docs.amd.com/r/2025.1-English/ug903-vivado-using-constraints/Multicycle-Paths)
 - [AMD UG903 — Fast-to-Slow Setup/Hold Example](https://docs.amd.com/r/2021.2-English/ug903-vivado-using-constraints/Example-Setup-3-start/Hold-2)
+
+- [AMD — Synchronous Clocks](https://docs.amd.com/r/en-US/ug903-vivado-using-constraints/Synchronous-Clocks)
+- [AMD — Constraining Asynchronous Signals](https://docs.amd.com/r/2021.2-English/ug903-vivado-using-constraints/Constraining-Asynchronous-Signals)
+- [AMD — Clock Exceptions Precedence Over set_max_delay](https://docs.amd.com/r/en-US/2020.2-English/ug1387-acap-hardware-ip-platform-dev-methodology/Clock-Exceptions-Precedence-Over-set_max_delay)
+- [Intel — Recovery and Removal Timing Violation Warnings](https://www.intel.com/content/www/us/en/docs/programmable/683241/25-1/recovery-and-removal-timing-violation.html)
